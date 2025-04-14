@@ -13,17 +13,20 @@ A standalone server for performing deep research using AI and web search. This s
 ## Installation
 
 1. Clone this repository:
+
    ```
    git clone https://github.com/yourusername/deep-research-server.git
    cd deep-research-server
    ```
 
 2. Install dependencies:
+
    ```
    npm install
    ```
 
 3. Create a `.env` file based on the provided `.env.example`:
+
    ```
    cp .env.example .env
    ```
@@ -79,7 +82,7 @@ Response:
 
 ```json
 {
-  "report": "# History of Artificial Intelligence\n\n## Executive Summary\n\nThis report provides a comprehensive overview of the history of artificial intelligence (AI)...",
+  "report": "# History of Artificial Intelligence\n\n## Executive Summary\n\nThis report provides a comprehensive overview of the history of artificial intelligence (AI)..."
 }
 ```
 
@@ -217,7 +220,6 @@ The server can be configured by editing the files in the `src/settings` director
 - `NODE_ENV`: The environment mode (development, production, test)
 - `GOOGLE_GENERATIVE_AI_API_KEY`: Your Google Gemini API key
 - `TAVILY_API_KEY`: Your Tavily API key
-- `ACCESS_PASSWORD`: Optional password for securing the API
 - `LOG_LEVEL`: Logging level (debug, info, warn, error)
 
 ## License

@@ -1,0 +1,12 @@
+curl --location 'http://localhost:3000/api/research/query' \
+--header 'Content-Type: application/json' \
+--data '{
+    "query": "your_query_here",
+    "maxIterations": 2,
+    "reportStyle": "academic",
+    "temperature": 0.7,
+    "maxResults": 10,
+    "promptType": "default",
+    "detailLevel": "standard",
+    "requirement": ""
+}'

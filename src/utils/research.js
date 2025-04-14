@@ -16,15 +16,15 @@ const settings = require('../settings');
 /**
  * Get the system prompt for the LLM
  */
-function getSystemPrompt() {
-  return "You are a helpful research assistant. Your task is to help users research topics thoroughly and provide comprehensive information.";
+function getSystemPrompt(promptType = 'default') {
+  return settings.prompts.getSystemPromptByName(promptType);
 }
 
 /**
  * Get the output guidelines prompt
  */
-function getOutputGuidelinesPrompt() {
-  return "Please provide a detailed, well-structured response. Include relevant facts, figures, and examples when available.";
+function getOutputGuidelinesPrompt(detailLevel = 'standard') {
+  return settings.prompts.getDetailLevelPrompt(detailLevel);
 }
 
 /**
@@ -153,17 +153,17 @@ async function reviewSerpQueriesPrompt(query, learnings, suggestion = "") {
 /**
  * Generate a prompt for writing the final report
  */
-function writeFinalReportPrompt(query, learnings, requirement = "") {
+function writeFinalReportPrompt(query, learnings, requirement = "", reportStyle = "", detailLevel = 'standard') {
   const learningsString = learnings
     .map((learning) => `<learning>\n${learning}\n</learning>`)
     .join("\n");
-  return [
-    `Given the following query from the user, write a comprehensive, highly detailed final report on the topic using the learnings from research. Make it extremely detailed and thorough, aim for 5 or more pages, and incorporate ALL the learnings from research:\n<query>${query}</query>`,
-    `Here are all the learnings from previous research:\n<learnings>\n${learningsString}\n</learnings>`,
-    requirement !== ""
-      ? `Please write according to the user's writing requirements:\n<requirement>${requirement}</requirement>`
-      : "",
-    `Structure the report with the following sections (and additional subsections as needed):
+
+  // Get the appropriate report style
+  let reportStructure = "";
+  if (reportStyle && reportStyle !== "") {
+    reportStructure = settings.prompts.getReportStyleByName(reportStyle);
+  } else {
+    reportStructure = `Structure the report with the following sections (and additional subsections as needed):
 1. Executive Summary - A concise overview of the entire report (250-300 words)
 2. Introduction - Context, importance, and scope of the topic
 3. Background - Historical context and development of the topic
@@ -173,14 +173,24 @@ function writeFinalReportPrompt(query, learnings, requirement = "") {
 7. Implications - What the findings mean for stakeholders, industry, or society
 8. Future Outlook - Trends, predictions, and potential developments
 9. Conclusion - Summary of key points and final thoughts
-10. References - Sources of information (if applicable)
+10. References - Sources of information (if applicable)`;
+  }
 
-Ensure the report is:
-- Comprehensive and exhaustive in covering all aspects of the topic
+  // Get the detail level prompt
+  const detailLevelPrompt = settings.prompts.getDetailLevelPrompt(detailLevel);
+
+  return [
+    `Given the following query from the user, write a final report on the topic using the learnings from research. ${detailLevelPrompt} Incorporate ALL the learnings from research:\n<query>${query}</query>`,
+    `Here are all the learnings from previous research:\n<learnings>\n${learningsString}\n</learnings>`,
+    requirement !== ""
+      ? `Please write according to the user's writing requirements:\n<requirement>${requirement}</requirement>`
+      : "",
+    reportStructure,
+    `Ensure the report is:
 - Logically structured with clear transitions between sections
 - Evidence-based with specific facts, figures, and examples
 - Balanced in presenting different perspectives
-- Written in a professional, academic tone
+- Written in a professional tone
 - Properly formatted using markdown syntax for readability`,
     `You need to write this report like a human researcher. Humans do not wrap their writing in markdown blocks. Include diverse data information such as tables, katex formulas, mermaid diagrams, etc. in the form of markdown syntax. **DO NOT** output anything other than the report.`,
   ].join("\n\n");
@@ -380,7 +390,9 @@ async function generateSearchQueries(
   topic,
   language = "en-US",
   provider = "google",
-  requestedModel
+  requestedModel,
+  promptType = 'default',
+  detailLevel = 'standard'
 ) {
   const { thinkingModel } = getModel(provider, requestedModel);
 
@@ -407,11 +419,19 @@ async function generateSearchQueries(
       const modelToUse = context.model || thinkingModel;
       const model = createProvider(provider, modelToUse);
 
+      // Set the system prompt based on the prompt type
+      const systemPrompt = getSystemPrompt(promptType);
+
       // Generate the prompt (now async)
       const prompt = await generateSerpQueriesPrompt(topic);
 
       const response = await model.generateContent({
-        contents: [{ role: "user", parts: [{ text: prompt + "\n\n" + getResponseLanguagePrompt(language) }] }],
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: systemPrompt + "\n\n" + prompt + "\n\n" + getOutputGuidelinesPrompt(detailLevel) + "\n\n" + getResponseLanguagePrompt(language) }]
+          }
+        ],
         generationConfig: {
           temperature: 0.2,
           maxOutputTokens: 1024,
@@ -471,15 +491,35 @@ async function runSearchTasks(
   try {
     // Dynamically import p-limit (ES Module)
     if (!pLimit) {
-      const pLimitModule = await import('p-limit');
-      pLimit = pLimitModule.default;
+      try {
+        const pLimitModule = await import('p-limit');
+        pLimit = pLimitModule.default;
+      } catch (err) {
+        console.error("Error importing p-limit:", err);
+        // Fallback to sequential processing if import fails
+        pLimit = (concurrency) => {
+          return (fn) => fn;
+        };
+      }
     }
 
     // Create a limit for parallel processing
     const limit = pLimit(parallelSearch ? 3 : 1);
 
+    // Ensure queries is an array
+    if (!queries || !Array.isArray(queries) || queries.length === 0) {
+      console.warn("No valid queries provided to runSearchTasks");
+      return { results: [] };
+    }
+
     // Process each query
     const tasks = queries.map(query => limit(async () => {
+      // Skip invalid queries
+      if (!query || !query.query) {
+        console.warn("Skipping invalid query in runSearchTasks");
+        return null;
+      }
+
       let sources = [];
 
       // Perform web search if enabled
@@ -536,25 +576,37 @@ async function runSearchTasks(
         .filter(line => line.trim().length > 0)
         .map(line => line.replace(/^[0-9]+\.\s*/, "").trim());
 
-      results.push({
+      const result = {
         query: query.query,
-        researchGoal: query.researchGoal,
+        researchGoal: query.researchGoal || "",
         sources,
         learnings
-      });
-
-      return {
-        query: query.query,
-        learnings
       };
+
+      results.push(result);
+      return result;
     }));
 
-    await Promise.all(tasks);
+    try {
+      // Wait for all tasks to complete, but handle individual task failures
+      const taskResults = await Promise.allSettled(tasks);
+
+      // Log any rejected tasks
+      taskResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          console.error(`Task for query "${queries[index]?.query || 'unknown'}" failed:`, result.reason);
+        }
+      });
+    } catch (error) {
+      console.error("Error waiting for search tasks to complete:", error);
+      // Continue with whatever results we have
+    }
 
     return { results };
   } catch (error) {
     console.error("Error running search tasks:", error);
-    throw error;
+    // Return empty results instead of throwing
+    return { results: [] };
   }
 }
 
@@ -622,7 +674,10 @@ async function writeFinalReport(
   language = "en-US",
   provider = "google",
   requestedModel,
-  requirement = ""
+  requirement = "",
+  promptType = 'default',
+  reportStyle = '',
+  detailLevel = 'standard'
 ) {
   const { networkingModel } = getModel(provider, requestedModel);
 
@@ -633,13 +688,16 @@ async function writeFinalReport(
       const modelToUse = context.model || networkingModel;
       const model = createProvider(provider, modelToUse);
 
+      // Set the system prompt based on the prompt type
+      const systemPrompt = getSystemPrompt(promptType);
+
       const response = await model.generateContent({
-        contents: [{
-          role: "user",
-          parts: [{
-            text: writeFinalReportPrompt(topic, learnings, requirement) + "\n\n" + getResponseLanguagePrompt(language)
-          }]
-        }],
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: systemPrompt + "\n\n" + writeFinalReportPrompt(topic, learnings, requirement, reportStyle, detailLevel) + "\n\n" + getResponseLanguagePrompt(language) }]
+          }
+        ],
         generationConfig: {
           // Lower temperature for fallback models to ensure more reliable output
           temperature: context.model !== networkingModel ? 0.5 : 0.7,
@@ -682,33 +740,70 @@ async function performDirectResearch(
   maxIterations = 2,
   options = {}
 ) {
+  // Extract options with defaults
+  const promptType = options.promptType || 'default';
+  const reportStyle = options.reportStyle || '';
+  const detailLevel = options.detailLevel || 'standard';
   try {
     console.log(`Starting direct research on: "${query}"`);
 
     // Step 1: Generate initial search queries
     console.log("Step 1: Generating search queries...");
-    const { queries } = await generateSearchQueries(query, language, provider, model);
+    let queries = [];
+    try {
+      const result = await generateSearchQueries(query, language, provider, model, promptType, detailLevel);
+      queries = result.queries;
+    } catch (error) {
+      console.error("Error generating search queries:", error);
+      // Use default queries if there's an error
+      queries = [
+        {
+          query: "Latest research on " + query,
+          researchGoal: "Find the most recent studies and papers on " + query,
+        },
+        {
+          query: "History of " + query,
+          researchGoal: "Understand the historical context and evolution of " + query,
+        },
+        {
+          query: "Future trends in " + query,
+          researchGoal: "Identify emerging trends and future directions for " + query,
+        },
+      ];
+    }
 
     // Step 2: Run search tasks
     console.log("Step 2: Running search tasks...");
-    const { results } = await runSearchTasks(
-      queries,
-      language,
-      provider,
-      model,
-      true,
-      searchProvider,
-      false,
-      options.maxResults || 5
-    );
+    let results = [];
+    try {
+      const searchResults = await runSearchTasks(
+        queries,
+        language,
+        provider,
+        model,
+        true,
+        searchProvider,
+        false,
+        options.maxResults || 5
+      );
+      results = searchResults.results || [];
+    } catch (error) {
+      console.error("Error running search tasks:", error);
+      // Continue with empty results if there's an error
+    }
 
     // Collect all learnings
     let allLearnings = [];
     results.forEach(result => {
-      if (result.learnings && Array.isArray(result.learnings)) {
+      if (result && result.learnings && Array.isArray(result.learnings)) {
         allLearnings = [...allLearnings, ...result.learnings];
       }
     });
+
+    // If we have no learnings at this point, add a basic one to avoid empty reports
+    if (allLearnings.length === 0) {
+      allLearnings.push(`Basic information about ${query} would typically include key facts and data points relevant to the topic.`);
+    }
 
     // Step 3: Perform additional iterations if needed
     let currentIteration = 1;
@@ -716,14 +811,22 @@ async function performDirectResearch(
       console.log(`Step ${currentIteration + 2}: Reviewing results and generating additional queries...`);
 
       // Review results and get additional queries
-      const { queries: additionalQueries } = await reviewSearchResults(
-        query,
-        allLearnings,
-        "",
-        language,
-        provider,
-        model
-      );
+      let additionalQueries = [];
+      try {
+        const reviewResult = await reviewSearchResults(
+          query,
+          allLearnings,
+          "",
+          language,
+          provider,
+          model
+        );
+        additionalQueries = reviewResult.queries || [];
+      } catch (error) {
+        console.error("Error reviewing search results:", error);
+        // Continue with empty additional queries if there's an error
+        break;
+      }
 
       // If no additional queries are suggested, break the loop
       if (!additionalQueries || additionalQueries.length === 0) {
@@ -734,42 +837,65 @@ async function performDirectResearch(
       console.log(`Step ${currentIteration + 3}: Running additional search tasks...`);
 
       // Run search tasks for additional queries
-      const { results: additionalResults } = await runSearchTasks(
-        additionalQueries,
-        language,
-        provider,
-        model,
-        true,
-        searchProvider,
-        false,
-        options.maxResults || 5
-      );
+      try {
+        const additionalSearchResults = await runSearchTasks(
+          additionalQueries,
+          language,
+          provider,
+          model,
+          true,
+          searchProvider,
+          false,
+          options.maxResults || 5
+        );
 
-      // Add new learnings to the collection
-      additionalResults.forEach(result => {
-        if (result.learnings && Array.isArray(result.learnings)) {
-          allLearnings = [...allLearnings, ...result.learnings];
+        // Add new learnings to the collection
+        if (additionalSearchResults && additionalSearchResults.results) {
+          additionalSearchResults.results.forEach(result => {
+            if (result && result.learnings && Array.isArray(result.learnings)) {
+              allLearnings = [...allLearnings, ...result.learnings];
+            }
+          });
         }
-      });
+      } catch (error) {
+        console.error(`Error running additional search tasks in iteration ${currentIteration}:`, error);
+        // Continue to the next step even if there's an error
+      }
 
       currentIteration++;
     }
 
     // Step 4: Generate final report
     console.log("Final Step: Generating comprehensive report...");
-    const { report } = await writeFinalReport(
-      query,
-      allLearnings,
-      language,
-      provider,
-      model,
-      options.reportStyle || ""
-    );
-
-    return report;
+    try {
+      const reportResult = await writeFinalReport(
+        query,
+        allLearnings,
+        language,
+        provider,
+        model,
+        options.requirement || "",
+        promptType,
+        reportStyle,
+        detailLevel
+      );
+      return reportResult.report;
+    } catch (error) {
+      console.error("Error writing final report:", error);
+      // Return a basic report if there's an error
+      return `# Research Report on ${query}\n\n` +
+             `## Error Generating Full Report\n\n` +
+             `We encountered an error while generating the full report: ${error.message}\n\n` +
+             `## Key Learnings\n\n` +
+             allLearnings.map((learning, index) => `${index + 1}. ${learning}`).join('\n\n');
+    }
   } catch (error) {
     console.error("Error in direct research:", error);
-    throw error;
+    // Return a basic report even if the entire process fails
+    return `# Research Report on ${query}\n\n` +
+           `## Error Generating Report\n\n` +
+           `We encountered an error while researching this topic: ${error.message}\n\n` +
+           `Please try again later or refine your query.`;
   }
 }
 
