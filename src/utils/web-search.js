@@ -114,19 +114,22 @@ async function tavily(
 function mockSearch(query) {
   log.debug("Using mock search", { query });
 
+  // Create mock search results that match the expected format
+  const mockResults = [
+    {
+      title: "Mock Result 1 for " + query,
+      content: "This is a mock search result for " + query + ". It contains some sample content that would be returned by a real search API.",
+      url: "https://example.com/mock-result-1"
+    },
+    {
+      title: "Mock Result 2 for " + query,
+      content: "This is another mock search result for " + query + ". It contains different sample content to simulate multiple search results.",
+      url: "https://example.com/mock-result-2"
+    }
+  ];
+
   return {
-    results: [
-      {
-        title: "Mock Result 1 for " + query,
-        content: "This is a mock search result for " + query + ". It contains some sample content that would be returned by a real search API.",
-        url: "https://example.com/mock-result-1"
-      },
-      {
-        title: "Mock Result 2 for " + query,
-        content: "This is another mock search result for " + query + ". It contains different sample content to simulate multiple search results.",
-        url: "https://example.com/mock-result-2"
-      }
-    ]
+    results: mockResults
   };
 }
 
@@ -164,6 +167,12 @@ async function performSearch(query, options = {}) {
       maxResults,
       options: Object.keys(options).filter(key => key !== 'apiKey').join(',')
     });
+
+    // If mock mode is enabled globally, override the provider
+    if (process.env.USE_MOCK_MODE === 'true' && searchProvider !== 'mock') {
+      log.info('Mock mode is enabled, using mock search provider instead of ' + searchProvider);
+      return mockSearch(query);
+    }
 
     switch (searchProvider) {
       case "tavily":

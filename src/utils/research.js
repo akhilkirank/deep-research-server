@@ -13,6 +13,9 @@ const { performSearch } = require('./web-search');
 // Import Open Router API integration
 const openRouter = require('./openrouter');
 
+// Import mock LLM implementation
+const mockLLM = require('./mock-llm');
+
 // Import custom logger
 const logger = require('./logger');
 
@@ -99,6 +102,15 @@ async function generateSerpQueriesPrompt(query) {
  * Generate a prompt for processing search results
  */
 function processResultPrompt(query, researchGoal, results = []) {
+  // Ensure results is an array
+  if (!Array.isArray(results)) {
+    log.warn('Search results is not an array, using empty array instead', {
+      resultsType: typeof results,
+      query
+    });
+    results = [];
+  }
+
   const contents = results.map(
     (result) => `<content url="${result.url}">\n${result.content}\n</content>`
   );
@@ -315,18 +327,31 @@ function sleep(ms) {
 /**
  * Create a provider instance based on the specified provider
  *
- * @param {string} provider - The provider to use (google, openrouter)
+ * @param {string} provider - The provider to use (google, openrouter, mock)
  * @param {string} model - The model to use
  * @param {Object} options - Additional options for the model
  * @param {string} apiKey - Optional API key (uses env var if not provided)
  * @returns {Object} - Provider instance with generateContent method
  */
 function createProvider(provider = "google", model, options = {}, apiKey) {
+  // Check if mock mode is enabled globally
+  const useMockMode = process.env.USE_MOCK_MODE === 'true';
+
+  // If mock mode is enabled, override the provider
+  if (useMockMode && provider !== 'mock') {
+    log.info('Mock mode is enabled, using mock provider instead of ' + provider);
+    provider = 'mock';
+  }
+
+  // Use provided provider or default from environment
   provider = provider || process.env.DEFAULT_LLM_PROVIDER || "google";
 
-  log.debug('Creating provider', { provider, model });
+  log.debug('Creating provider', { provider, model, useMockMode });
 
-  if (provider === "google") {
+  // Handle mock provider
+  if (provider === "mock") {
+    return mockLLM.createMockProvider(options.mockType || "google", model, options);
+  } else if (provider === "google") {
     const genAI = new GoogleGenerativeAI(apiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY);
     return genAI.getGenerativeModel({ model: model || "gemini-1.5-pro", ...options });
   } else if (provider === "openrouter") {
@@ -564,13 +589,30 @@ async function runSearchTasks(
       // Perform web search if enabled
       if (enableSearch && searchProvider !== "model") {
         try {
-          sources = await performSearch(
-            query.query,
+          const searchResults = await performSearch(query.query, {
             searchProvider,
-            searchMaxResult
-          );
+            maxResults: searchMaxResult
+          });
+
+          // Ensure we have an array of results
+          if (searchResults && Array.isArray(searchResults.results)) {
+            sources = searchResults.results;
+          } else if (searchResults && typeof searchResults.results === 'object') {
+            // If results is an object but not an array, log a warning
+            log.warn('Search results is not an array, attempting to extract results', {
+              resultsType: typeof searchResults.results,
+              query: query.query
+            });
+            sources = [];
+          } else {
+            sources = [];
+          }
         } catch (err) {
-          console.error(`Search error with ${searchProvider}:`, err);
+          log.error(`Search error with ${searchProvider}:`, {
+            query: query.query,
+            error: err.message,
+            stack: err.stack
+          });
           // Continue with empty sources if search fails
         }
       }

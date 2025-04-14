@@ -107,12 +107,13 @@ const providerSettings = {
   defaultProvider: process.env.DEFAULT_LLM_PROVIDER || 'google',
 
   // Available providers
-  availableProviders: ['google', 'openrouter'],
+  availableProviders: ['google', 'openrouter', 'mock'],
 
   // Provider display names
   providerNames: {
     google: 'Google Gemini',
-    openrouter: 'Open Router'
+    openrouter: 'Open Router',
+    mock: 'Mock Provider (Testing)'
   }
 };
 

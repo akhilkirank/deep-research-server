@@ -71,6 +71,9 @@ describe('Web Search Utility', () => {
     // Reset mocks
     jest.clearAllMocks();
 
+    // Ensure mock mode is disabled for tests
+    process.env.USE_MOCK_MODE = 'false';
+
     // Mock successful API response
     global.fetch.mockResolvedValue({
       ok: true,

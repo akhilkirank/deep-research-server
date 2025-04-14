@@ -255,6 +255,7 @@ Response:
 | `LOG_LEVEL`                    | Logging level (debug, info, warn, error)             | info                                |
 | `DEFAULT_LLM_PROVIDER`         | Default LLM provider to use                          | google                              |
 | `DEFAULT_SEARCH_PROVIDER`      | Default search provider to use                       | tavily                              |
+| `USE_MOCK_MODE`                | Enable mock mode for testing without API tokens      | false                               |
 | `DEFAULT_THINKING_MODEL`       | Default model for thinking tasks                     | gemini-2.0-flash-thinking-exp-01-21 |
 | `DEFAULT_NETWORKING_MODEL`     | Default model for networking tasks                   | gemini-2.0-flash-001                |
 | `DEFAULT_OPENROUTER_MODEL`     | Default Open Router model                            | anthropic/claude-3-opus:beta        |
@@ -296,6 +297,27 @@ Available models:
 - `openai/gpt-3.5-turbo`
 - `meta-llama/llama-3-70b-instruct`
 - `meta-llama/llama-3-8b-instruct`
+
+### Mock Provider
+
+The server includes a mock mode for testing without using real API tokens. This is useful for development and testing purposes.
+
+To enable mock mode, set `USE_MOCK_MODE=true` in your `.env` file. When mock mode is enabled, **both** LLM providers and search providers will automatically use mock implementations, regardless of what providers are specified in API requests.
+
+The mock implementations simulate responses with predefined content for different types of requests:
+
+- Search query generation
+- Search result processing
+- Report writing
+- Web search results
+
+This ensures you can test the entire application flow without using any real API tokens.
+
+You can test the mock mode by running:
+
+```bash
+node test-mock-mode.js
+```
 
 ## Customization Options
 

@@ -194,12 +194,28 @@ app.use((err, req, res, next) => {
 // Start server only if this file is run directly
 if (require.main === module) {
   app.listen(PORT, () => {
+    // Check if mock mode is enabled
+    const mockModeEnabled = process.env.USE_MOCK_MODE === 'true';
+
+    // Log server startup information
     serverLogger.server(`Deep Research Server started`, {
       port: PORT,
       environment: NODE_ENV,
-      nodeVersion: process.version
+      nodeVersion: process.version,
+      mockMode: mockModeEnabled
     });
+
+    // Log API endpoint information
     serverLogger.server(`API available at http://localhost:${PORT}/api/research`);
+
+    // If mock mode is enabled, log a prominent message
+    if (mockModeEnabled) {
+      serverLogger.server(`⚠️ MOCK MODE ENABLED - No real API tokens will be used ⚠️`, {
+        mockLLM: true,
+        mockSearch: true
+      });
+      serverLogger.server(`All LLM and search providers will use mock implementations regardless of specified providers`);
+    }
   });
 }
 
