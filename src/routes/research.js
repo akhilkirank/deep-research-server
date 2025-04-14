@@ -8,7 +8,8 @@ const {
   runSearchTasks,
   reviewSearchResults,
   writeFinalReport,
-  performDirectResearch
+  performDirectResearch,
+  normalizeMarkdownNewlines
 } = require('../utils/research');
 
 // Validation schemas
@@ -179,10 +180,12 @@ router.post('/query', async (req, res) => {
     } catch (researchError) {
       console.error("Error during research process, but continuing with basic report:", researchError);
       // Generate a basic report even if the research process fails
-      report = `# Research Report on ${query}\n\n` +
+      const errorReport = `# Research Report on ${query}\n\n` +
               `## Error During Research\n\n` +
               `We encountered an error while researching this topic: ${researchError.message}\n\n` +
               `Please try again later or refine your query.`;
+
+      report = normalizeMarkdownNewlines(errorReport);
     }
 
     // Return the report
@@ -193,12 +196,13 @@ router.post('/query', async (req, res) => {
     // Even in case of a catastrophic error, try to return a report instead of an error
     // This ensures the client always gets a response they can use
     const query = req.body.query || "your query";
-    const report = `# Research Report on ${query}\n\n` +
+    const errorReport = `# Research Report on ${query}\n\n` +
                   `## Error Processing Request\n\n` +
                   `We encountered an unexpected error while processing your request: ${error.message}\n\n` +
                   `Please try again later or contact support if the issue persists.`;
 
-    return res.json({ report });
+    const formattedReport = normalizeMarkdownNewlines(errorReport);
+    return res.json({ report: formattedReport });
   }
 });
 
@@ -404,12 +408,24 @@ router.post('/report', async (req, res) => {
       detailLevel
     );
 
+    // The report is already normalized by the writeFinalReport function
     return res.json({ report });
   } catch (error) {
     console.error("Error in research/report API:", error);
-    return res.status(500).json({
-      code: 500,
-      message: error.message || "An unknown error occurred"
+
+    // Create a basic error report with proper markdown formatting
+    const topic = req.body?.topic || "the requested topic";
+    const errorReport = `# Research Report on ${topic}\n\n` +
+                       `## Error Generating Report\n\n` +
+                       `We encountered an error while generating the report: ${error.message}\n\n` +
+                       `Please try again later or contact support if the issue persists.`;
+
+    const formattedReport = normalizeMarkdownNewlines(errorReport);
+
+    // Return a formatted error report instead of an error status
+    return res.json({
+      report: formattedReport,
+      error: error.message
     });
   }
 });

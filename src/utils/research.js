@@ -10,6 +10,15 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 // Import web search functionality
 const { performSearch } = require('./web-search');
 
+// Import Open Router API integration
+const openRouter = require('./openrouter');
+
+// Import custom logger
+const logger = require('./logger');
+
+// Create a module-specific logger
+const log = logger.child({ module: 'research' });
+
 // Import settings
 const settings = require('../settings');
 
@@ -272,10 +281,11 @@ function safeJsonParse(text, source = 'unknown', defaultValue = []) {
  */
 function getModel(provider = "google", requestedModel) {
   const llmSettings = settings.llm;
+  provider = provider || process.env.DEFAULT_LLM_PROVIDER || "google";
 
   // Default models
-  let thinkingModel = "gemini-1.5-flash";
-  let networkingModel = "gemini-1.5-pro";
+  let thinkingModel = process.env.DEFAULT_THINKING_MODEL || "gemini-1.5-flash";
+  let networkingModel = process.env.DEFAULT_NETWORKING_MODEL || "gemini-1.5-pro";
 
   // Override with requested model if provided
   if (requestedModel) {
@@ -284,8 +294,12 @@ function getModel(provider = "google", requestedModel) {
   } else if (provider === "google") {
     thinkingModel = llmSettings.googleSettings.thinkingModel;
     networkingModel = llmSettings.googleSettings.networkingModel;
+  } else if (provider === "openrouter") {
+    thinkingModel = process.env.DEFAULT_OPENROUTER_MODEL || "anthropic/claude-3-opus:beta";
+    networkingModel = process.env.DEFAULT_OPENROUTER_MODEL || "anthropic/claude-3-opus:beta";
   }
 
+  log.debug('Selected models', { provider, thinkingModel, networkingModel });
   return { thinkingModel, networkingModel };
 }
 
@@ -300,14 +314,32 @@ function sleep(ms) {
 
 /**
  * Create a provider instance based on the specified provider
+ *
+ * @param {string} provider - The provider to use (google, openrouter)
+ * @param {string} model - The model to use
+ * @param {Object} options - Additional options for the model
+ * @param {string} apiKey - Optional API key (uses env var if not provided)
+ * @returns {Object} - Provider instance with generateContent method
  */
 function createProvider(provider = "google", model, options = {}, apiKey) {
+  provider = provider || process.env.DEFAULT_LLM_PROVIDER || "google";
+
+  log.debug('Creating provider', { provider, model });
+
   if (provider === "google") {
     const genAI = new GoogleGenerativeAI(apiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY);
     return genAI.getGenerativeModel({ model: model || "gemini-1.5-pro", ...options });
+  } else if (provider === "openrouter") {
+    return openRouter.createModelWrapper({
+      model: model || process.env.DEFAULT_OPENROUTER_MODEL || "anthropic/claude-3-opus:beta",
+      temperature: options.temperature || 0.7,
+      maxOutputTokens: options.maxOutputTokens || 4096,
+      apiKey: apiKey || process.env.OPENROUTER_API_KEY
+    });
   }
 
   // Default to Google if provider not supported
+  log.warn('Unsupported provider, defaulting to Google', { requestedProvider: provider });
   const genAI = new GoogleGenerativeAI(apiKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY);
   return genAI.getGenerativeModel({ model: model || "gemini-1.5-pro", ...options });
 }
@@ -336,7 +368,10 @@ async function withRetry(fn, options = {}) {
     try {
       // If this isn't the first attempt and we have a fallback model, use it
       if (attempt > 0 && context.model && fallbackModel) {
-        console.log(`Attempt ${attempt}: Using fallback model ${fallbackModel} instead of ${context.model}`);
+        log.info(`Retry attempt ${attempt}: Using fallback model`, {
+          fallbackModel,
+          originalModel: context.model
+        });
         context.model = fallbackModel;
       }
 
@@ -371,7 +406,11 @@ async function withRetry(fn, options = {}) {
       // Cap the delay at maxDelay
       retryDelay = Math.min(retryDelay, maxDelay);
 
-      console.log(`Rate limit hit. Retrying in ${retryDelay}ms (attempt ${attempt + 1}/${maxRetries})`);
+      log.warn(`Rate limit hit. Retrying`, {
+        retryDelay: `${retryDelay}ms`,
+        attempt: attempt + 1,
+        maxRetries
+      });
       await sleep(retryDelay);
 
       // Exponential backoff for next attempt
@@ -495,7 +534,7 @@ async function runSearchTasks(
         const pLimitModule = await import('p-limit');
         pLimit = pLimitModule.default;
       } catch (err) {
-        console.error("Error importing p-limit:", err);
+        log.error("Error importing p-limit", { error: err.message, stack: err.stack });
         // Fallback to sequential processing if import fails
         pLimit = (concurrency) => {
           return (fn) => fn;
@@ -508,7 +547,7 @@ async function runSearchTasks(
 
     // Ensure queries is an array
     if (!queries || !Array.isArray(queries) || queries.length === 0) {
-      console.warn("No valid queries provided to runSearchTasks");
+      log.warn("No valid queries provided to runSearchTasks");
       return { results: [] };
     }
 
@@ -516,7 +555,7 @@ async function runSearchTasks(
     const tasks = queries.map(query => limit(async () => {
       // Skip invalid queries
       if (!query || !query.query) {
-        console.warn("Skipping invalid query in runSearchTasks");
+        log.warn("Skipping invalid query in runSearchTasks");
         return null;
       }
 
@@ -565,7 +604,11 @@ async function runSearchTasks(
           context: { model: networkingModel } // Pass the original model for context
         });
       } catch (error) {
-        console.error(`Error processing search results for query "${query.query}":`, error);
+        log.error(`Error processing search results for query`, {
+          query: query.query,
+          error: error.message,
+          stack: error.stack
+        });
         // Return a basic response if we hit an error
         content = `Unable to process search results due to API limits. Basic information about ${query.query} would typically include key facts and data points relevant to the topic.`;
       }
@@ -594,17 +637,27 @@ async function runSearchTasks(
       // Log any rejected tasks
       taskResults.forEach((result, index) => {
         if (result.status === 'rejected') {
-          console.error(`Task for query "${queries[index]?.query || 'unknown'}" failed:`, result.reason);
+          log.error(`Task for query failed`, {
+            query: queries[index]?.query || 'unknown',
+            error: result.reason?.message || 'Unknown error',
+            stack: result.reason?.stack
+          });
         }
       });
     } catch (error) {
-      console.error("Error waiting for search tasks to complete:", error);
+      log.error("Error waiting for search tasks to complete", {
+        error: error.message,
+        stack: error.stack
+      });
       // Continue with whatever results we have
     }
 
     return { results };
   } catch (error) {
-    console.error("Error running search tasks:", error);
+    log.error("Error running search tasks", {
+      error: error.message,
+      stack: error.stack
+    });
     // Return empty results instead of throwing
     return { results: [] };
   }
@@ -659,10 +712,46 @@ async function reviewSearchResults(
 
     return { queries };
   } catch (error) {
-    console.error("Error reviewing search results:", error);
+    log.error("Error reviewing search results", {
+      error: error.message,
+      stack: error.stack
+    });
     // Return empty array instead of throwing
     return { queries: [], error: error.message };
   }
+}
+
+/**
+ * Normalize newlines in markdown text for better compatibility with markdown editors
+ * @param {string} text - The markdown text to normalize
+ * @returns {string} - Normalized markdown text
+ */
+function normalizeMarkdownNewlines(text) {
+  if (!text) return text;
+
+  // Replace \n with proper line breaks for markdown
+  let normalized = text;
+
+  // Ensure headers have proper spacing
+  normalized = normalized.replace(/\n(#{1,6}\s)/g, '\n\n$1');
+
+  // Ensure paragraphs have proper spacing
+  normalized = normalized.replace(/\n([^\n#\-\*\d>\|`\s])/g, '\n\n$1');
+
+  // Fix list items spacing
+  normalized = normalized.replace(/\n(\s*[-*+]\s)/g, '\n\n$1');
+  normalized = normalized.replace(/\n(\s*\d+\.\s)/g, '\n\n$1');
+
+  // Fix table formatting - ensure a blank line after the last row of a table
+  normalized = normalized.replace(/(\|[^\n]+\|)\n(?!\s*\|)/g, '$1\n\n');
+
+  // Ensure proper spacing between table rows
+  normalized = normalized.replace(/(\|[^\n]+\|)\n(?=\s*\|)/g, '$1\n');
+
+  // Remove excessive newlines (more than 2 consecutive)
+  normalized = normalized.replace(/\n{3,}/g, '\n\n');
+
+  return normalized;
 }
 
 /**
@@ -706,7 +795,9 @@ async function writeFinalReport(
         },
       });
 
-      return response.response.text();
+      // Get the raw text and normalize it for markdown compatibility
+      const rawText = response.response.text();
+      return normalizeMarkdownNewlines(rawText);
     }, {
       maxRetries: 3,
       fallbackModel: "gemini-1.5-flash", // Fallback to a smaller model if rate limited
@@ -715,14 +806,20 @@ async function writeFinalReport(
 
     return { report };
   } catch (error) {
-    console.error("Error writing final report:", error);
+    log.error("Error writing final report", {
+      topic,
+      error: error.message,
+      stack: error.stack
+    });
     // Return a basic report instead of throwing
-    return {
-      report: `# Research Report on ${topic}\n\n` +
+    const errorReport = `# Research Report on ${topic}\n\n` +
               `## Error Generating Full Report\n\n` +
               `We encountered an error while generating the full report: ${error.message}\n\n` +
               `## Key Learnings\n\n` +
-              learnings.map((learning, index) => `${index + 1}. ${learning}`).join('\n\n'),
+              learnings.map((learning, index) => `${index + 1}. ${learning}`).join('\n\n');
+
+    return {
+      report: normalizeMarkdownNewlines(errorReport),
       error: error.message
     };
   }
@@ -745,16 +842,19 @@ async function performDirectResearch(
   const reportStyle = options.reportStyle || '';
   const detailLevel = options.detailLevel || 'standard';
   try {
-    console.log(`Starting direct research on: "${query}"`);
+    log.info(`Starting direct research`, { query, language, provider, searchProvider });
 
     // Step 1: Generate initial search queries
-    console.log("Step 1: Generating search queries...");
+    log.info("Step 1: Generating search queries");
     let queries = [];
     try {
       const result = await generateSearchQueries(query, language, provider, model, promptType, detailLevel);
       queries = result.queries;
     } catch (error) {
-      console.error("Error generating search queries:", error);
+      log.error("Error generating search queries", {
+        error: error.message,
+        stack: error.stack
+      });
       // Use default queries if there's an error
       queries = [
         {
@@ -773,7 +873,7 @@ async function performDirectResearch(
     }
 
     // Step 2: Run search tasks
-    console.log("Step 2: Running search tasks...");
+    log.info("Step 2: Running search tasks", { queryCount: queries.length });
     let results = [];
     try {
       const searchResults = await runSearchTasks(
@@ -788,7 +888,10 @@ async function performDirectResearch(
       );
       results = searchResults.results || [];
     } catch (error) {
-      console.error("Error running search tasks:", error);
+      log.error("Error running search tasks", {
+        error: error.message,
+        stack: error.stack
+      });
       // Continue with empty results if there's an error
     }
 
@@ -808,7 +911,10 @@ async function performDirectResearch(
     // Step 3: Perform additional iterations if needed
     let currentIteration = 1;
     while (currentIteration < maxIterations) {
-      console.log(`Step ${currentIteration + 2}: Reviewing results and generating additional queries...`);
+      log.info(`Step ${currentIteration + 2}: Reviewing results and generating additional queries`, {
+        iteration: currentIteration,
+        learningsCount: allLearnings.length
+      });
 
       // Review results and get additional queries
       let additionalQueries = [];
@@ -823,18 +929,25 @@ async function performDirectResearch(
         );
         additionalQueries = reviewResult.queries || [];
       } catch (error) {
-        console.error("Error reviewing search results:", error);
+        log.error("Error reviewing search results", {
+          error: error.message,
+          stack: error.stack,
+          iteration: currentIteration
+        });
         // Continue with empty additional queries if there's an error
         break;
       }
 
       // If no additional queries are suggested, break the loop
       if (!additionalQueries || additionalQueries.length === 0) {
-        console.log("No additional queries suggested. Moving to final report.");
+        log.info("No additional queries suggested. Moving to final report.");
         break;
       }
 
-      console.log(`Step ${currentIteration + 3}: Running additional search tasks...`);
+      log.info(`Step ${currentIteration + 3}: Running additional search tasks`, {
+        iteration: currentIteration,
+        additionalQueriesCount: additionalQueries.length
+      });
 
       // Run search tasks for additional queries
       try {
@@ -858,7 +971,11 @@ async function performDirectResearch(
           });
         }
       } catch (error) {
-        console.error(`Error running additional search tasks in iteration ${currentIteration}:`, error);
+        log.error(`Error running additional search tasks`, {
+          iteration: currentIteration,
+          error: error.message,
+          stack: error.stack
+        });
         // Continue to the next step even if there's an error
       }
 
@@ -866,7 +983,9 @@ async function performDirectResearch(
     }
 
     // Step 4: Generate final report
-    console.log("Final Step: Generating comprehensive report...");
+    log.info("Final Step: Generating comprehensive report", {
+      learningsCount: allLearnings.length
+    });
     try {
       const reportResult = await writeFinalReport(
         query,
@@ -879,23 +998,38 @@ async function performDirectResearch(
         reportStyle,
         detailLevel
       );
+      log.info("Research completed successfully", {
+        query,
+        reportLength: reportResult.report.length
+      });
       return reportResult.report;
     } catch (error) {
-      console.error("Error writing final report:", error);
+      log.error("Error writing final report", {
+        error: error.message,
+        stack: error.stack
+      });
       // Return a basic report if there's an error
-      return `# Research Report on ${query}\n\n` +
+      const errorReport = `# Research Report on ${query}\n\n` +
              `## Error Generating Full Report\n\n` +
              `We encountered an error while generating the full report: ${error.message}\n\n` +
              `## Key Learnings\n\n` +
              allLearnings.map((learning, index) => `${index + 1}. ${learning}`).join('\n\n');
+
+      return normalizeMarkdownNewlines(errorReport);
     }
   } catch (error) {
-    console.error("Error in direct research:", error);
+    log.error("Error in direct research", {
+      query,
+      error: error.message,
+      stack: error.stack
+    });
     // Return a basic report even if the entire process fails
-    return `# Research Report on ${query}\n\n` +
+    const errorReport = `# Research Report on ${query}\n\n` +
            `## Error Generating Report\n\n` +
            `We encountered an error while researching this topic: ${error.message}\n\n` +
            `Please try again later or refine your query.`;
+
+    return normalizeMarkdownNewlines(errorReport);
   }
 }
 
@@ -918,5 +1052,6 @@ module.exports = {
   runSearchTasks,
   reviewSearchResults,
   writeFinalReport,
-  performDirectResearch
+  performDirectResearch,
+  normalizeMarkdownNewlines
 };

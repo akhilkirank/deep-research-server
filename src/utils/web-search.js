@@ -1,8 +1,12 @@
 const { shuffle } = require('radash');
 const settings = require('../settings');
 
+// Import custom logger
+const logger = require('./logger');
+const log = logger.child({ module: 'web-search', category: logger.CATEGORIES.API });
+
 // Base URLs for search providers
-const TAVILY_BASE_URL = "https://api.tavily.com";
+const TAVILY_BASE_URL = process.env.TAVILY_API_BASE_URL || "https://api.tavily.com";
 
 /**
  * Complete a path with a base URL
@@ -16,21 +20,23 @@ function completePath(baseUrl, path = "") {
  * Search with Tavily
  */
 async function tavily(
-  query, 
+  query,
   options = {},
   maxResults = 5
 ) {
-  const tavilyApiKey = process.env.TAVILY_API_KEY || "";
+  const startTime = Date.now();
+  const tavilyApiKey = options.apiKey || process.env.TAVILY_API_KEY || "";
   const tavilyApiKeys = shuffle(tavilyApiKey.split(","));
-  
+
   if (!tavilyApiKeys[0]) {
-    console.error("No Tavily API key found");
-    return [];
+    const error = new Error('Tavily API key is required');
+    log.apiError("No Tavily API key found", { error: error.message });
+    throw error;
   }
-  
+
   try {
     const searchSettings = settings.search.tavilySearchSettings;
-    
+
     const response = await fetch(
       `${TAVILY_BASE_URL}/search`,
       {
@@ -52,25 +58,53 @@ async function tavily(
         }),
       }
     );
-    
+
     if (!response.ok) {
-      const errorData = await response.json();
-      console.error("Tavily API error:", errorData);
-      return [];
+      let errorData;
+      try {
+        errorData = await response.json();
+      } catch (e) {
+        errorData = { error: 'Failed to parse error response' };
+      }
+
+      const error = new Error(`Tavily API error: ${response.status} ${response.statusText}`);
+      error.status = response.status;
+      error.data = errorData;
+
+      log.apiError("Tavily API request failed", {
+        status: response.status,
+        statusText: response.statusText,
+        endpoint: '/search',
+        errorSummary: errorData?.error || 'Unknown error'
+      });
+
+      throw error;
     }
-    
+
     const { results } = await response.json();
-    
-    return (results || [])
+
+    const formattedResults = (results || [])
       .filter((item) => item.content && item.url)
       .map((result) => ({
         title: result.title || "",
         content: result.content || "",
         url: result.url || ""
       }));
+
+    log.api("Tavily search completed", {
+      query,
+      resultCount: formattedResults.length,
+      timeToComplete: `${Date.now() - startTime}ms`
+    });
+
+    return { results: formattedResults };
   } catch (error) {
-    console.error("Error in Tavily search:", error);
-    return [];
+    log.apiError("Error in Tavily search", {
+      query,
+      error: error.message,
+      errorType: error.name || 'Error'
+    });
+    throw error;
   }
 }
 
@@ -78,59 +112,92 @@ async function tavily(
  * Mock search function for testing
  */
 function mockSearch(query) {
-  return [
-    {
-      title: "Mock Result 1 for " + query,
-      content: "This is a mock search result for " + query + ". It contains some sample content that would be returned by a real search API.",
-      url: "https://example.com/mock-result-1"
-    },
-    {
-      title: "Mock Result 2 for " + query,
-      content: "This is another mock search result for " + query + ". It contains different sample content to simulate multiple search results.",
-      url: "https://example.com/mock-result-2"
-    }
-  ];
+  log.debug("Using mock search", { query });
+
+  return {
+    results: [
+      {
+        title: "Mock Result 1 for " + query,
+        content: "This is a mock search result for " + query + ". It contains some sample content that would be returned by a real search API.",
+        url: "https://example.com/mock-result-1"
+      },
+      {
+        title: "Mock Result 2 for " + query,
+        content: "This is another mock search result for " + query + ". It contains different sample content to simulate multiple search results.",
+        url: "https://example.com/mock-result-2"
+      }
+    ]
+  };
 }
 
 /**
  * Perform a search using the specified provider
  */
-async function performSearch(
-  query,
-  searchProvider = "tavily",
-  maxResults = 5
-) {
+/**
+ * Perform a search using the specified provider
+ *
+ * @param {string} query - The search query
+ * @param {Object} options - Search options
+ * @param {string} options.searchProvider - The search provider to use (default: "tavily")
+ * @param {number} options.maxResults - Maximum number of results to return (default: 10)
+ * @param {string} options.apiKey - API key for the search provider (optional)
+ * @returns {Promise<Object>} - Search results
+ */
+async function performSearch(query, options = {}) {
+  const searchProvider = options.searchProvider || "tavily";
+  const maxResults = options.maxResults || 10;
+  const startTime = Date.now();
   try {
     // Check if search is enabled in settings
     const searchEnabled = settings.app.appSettings.enableSearch;
     if (!searchEnabled) {
-      console.log("Search is disabled in settings. Using mock search.");
+      log.api("Search is disabled in settings. Using mock search.", { query });
       return mockSearch(query);
     }
-    
+
     // Use mock implementation if specified in settings
     const useMockWhenKeysAreMissing = settings.app.appSettings.useMockWhenKeysAreMissing;
-    
+
+    log.api("Performing search", {
+      query,
+      provider: searchProvider,
+      maxResults,
+      options: Object.keys(options).filter(key => key !== 'apiKey').join(',')
+    });
+
     switch (searchProvider) {
       case "tavily":
-        const tavilyResults = await tavily(query, {}, maxResults);
-        if (tavilyResults.length > 0 || !useMockWhenKeysAreMissing) {
-          return tavilyResults;
+        try {
+          return await tavily(query, options, maxResults);
+        } catch (error) {
+          if (useMockWhenKeysAreMissing) {
+            log.warn("Tavily search failed. Using mock search.", {
+              errorType: error.name || 'Error',
+              errorSummary: error.message
+            });
+            return mockSearch(query);
+          }
+          throw error;
         }
-        console.log("No Tavily results. Using mock search.");
-        return mockSearch(query);
-        
+
       case "mock":
         return mockSearch(query);
-        
+
       default:
-        console.log(`Unsupported search provider: ${searchProvider}. Using mock search.`);
+        log.warn(`Unsupported search provider: ${searchProvider}. Using mock search.`);
         return mockSearch(query);
     }
   } catch (error) {
-    console.error(`Error in ${searchProvider} search:`, error);
+    log.apiError(`Search operation failed`, {
+      provider: searchProvider,
+      query,
+      error: error.message,
+      duration: `${Date.now() - startTime}ms`,
+      errorType: error.name || 'Error'
+    });
+
     if (settings.app.appSettings.useMockWhenKeysAreMissing) {
-      console.log("Using mock search due to error.");
+      log.api("Falling back to mock search due to error", { query });
       return mockSearch(query);
     }
     throw error;
