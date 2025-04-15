@@ -87,8 +87,8 @@ async function saveReportToFile(report, topic, options = {}) {
     // Create a sanitized filename from the topic
     let topicForFilename = topic;
 
-    // If the topic is very long or starts with code block markers, use a generic name
-    if (!topic || topic.length > 200 || topic.startsWith('```')) {
+    // If the topic is not a string, is very long, or starts with code block markers, use a generic name
+    if (!topic || typeof topic !== 'string' || topic.length > 200 || topic.startsWith('```')) {
       // Extract a title from the report content if possible
       const titleMatch = report.match(/^# (.+)$/m);
       if (titleMatch && titleMatch[1]) {

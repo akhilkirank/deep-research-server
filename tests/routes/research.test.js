@@ -49,7 +49,45 @@ jest.mock('../../src/utils/research', () => {
     writeFinalReport: jest.fn().mockResolvedValue({
       report: '# Quantum Computing Report\n\nThis is a test report.'
     }),
-    directResearch: jest.fn().mockResolvedValue('# Quantum Computing Report\n\nThis is a test report.')
+    directResearch: jest.fn().mockResolvedValue('# Quantum Computing Report\n\nThis is a test report.'),
+    performProductResearch: jest.fn().mockImplementation((productData) => {
+      // Check if we need to return JSON array format
+      if (productData.metadata?.responseFormat?.structure === 'array') {
+        return JSON.stringify([
+          {
+            "id": "product1",
+            "name": "Samsung Galaxy S23 Ultra",
+            "imageUrl": "https://example.com/s23.jpg",
+            "features": ["6.8-inch display", "200MP camera"],
+            "pros": ["Excellent camera", "Great display", "Long battery life"],
+            "cons": ["Expensive", "Large size"],
+            "justification": "This premium phone matches your requirements for a Samsung device with large screen."
+          },
+          {
+            "id": "product2",
+            "name": "Samsung Galaxy Z Fold 4",
+            "imageUrl": "https://example.com/fold4.jpg",
+            "features": ["7.6-inch foldable display", "50MP camera"],
+            "pros": ["Innovative design", "Large screen", "Multitasking"],
+            "cons": ["Very expensive", "Heavy"],
+            "justification": "This foldable device offers the largest screen in Samsung's lineup."
+          },
+          {
+            "id": "product3",
+            "name": "Samsung Galaxy S23+",
+            "imageUrl": "https://example.com/s23plus.jpg",
+            "features": ["6.6-inch display", "50MP camera"],
+            "pros": ["Great performance", "Good camera", "Premium build"],
+            "cons": ["Expensive", "Similar to previous model"],
+            "justification": "A slightly more affordable option while maintaining premium features."
+          }
+        ]);
+      }
+
+      // Return standard markdown format
+      return '# Smartphone Product Research Report\n\n## Top 3 Recommendations\n\n1. Samsung Galaxy S23 Ultra\n2. Samsung Galaxy Z Fold 4\n3. Samsung Galaxy S23+\n\nThis is a test product report with exactly 3 recommendations.';
+    }),
+    normalizeMarkdownNewlines: jest.fn(text => text)
   };
 });
 
@@ -174,6 +212,125 @@ describe('Research Routes', () => {
     expect(response.body.report).toContain('Quantum Computing Report');
   });
 
+  test('POST /api/research/query should handle legacy product mode', async () => {
+    const response = await request(app)
+      .post('/api/research/query')
+      .send({
+        promType: 'product',
+        reportStyle: 'product',
+        productCategory: 'Smartphone',
+        productName: '',
+        userPreferences: {
+          screenSize: '6-inch',
+          budget: 'Under 600 USD',
+          features: ['advanced camera', 'long battery life'],
+          brandPreference: 'Any'
+        },
+        extraDetails: {
+          focus: 'mid-range phones with top camera performance',
+          notes: 'Include recent trends and expert reviews'
+        },
+        language: 'en-US',
+        provider: 'google',
+        model: 'gemini-1.5-pro',
+        searchProvider: 'tavily',
+        maxResults: 8
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('report');
+    expect(response.body.report).toContain('Smartphone Product Research Report');
+    expect(response.body.report).toContain('Top 3 Recommendations');
+    expect(response.body.report).toContain('Samsung Galaxy S23 Ultra');
+    expect(response.body.report).toContain('Samsung Galaxy Z Fold 4');
+    expect(response.body.report).toContain('Samsung Galaxy S23+');
+  });
+
+  test('POST /api/research/query should handle new product mode format', async () => {
+    const response = await request(app)
+      .post('/api/research/query')
+      .send({
+        context: {
+          category: 'Electronics',
+          productType: 'Smartphones'
+        },
+        preferences: {
+          questions: [
+            {
+              text: 'Preferred brand',
+              answer: 'Samsung',
+              keywords: 'Looking for the latest model'
+            },
+            {
+              text: 'Screen size',
+              answer: 'Extra Large (over 6.7")'
+            },
+            {
+              text: 'Budget range',
+              answer: 'Ultra Premium (over $900)'
+            },
+            {
+              text: 'Feature',
+              answer: 'Display quality'
+            },
+            {
+              text: 'Color',
+              answer: 'Red'
+            }
+          ]
+        },
+        metadata: {
+          requestType: 'product_recommendation',
+          responseFormat: {
+            structure: 'array',
+            fields: [
+              'id',
+              'name',
+              'imageUrl',
+              'features',
+              'pros',
+              'cons',
+              'justification'
+            ]
+          },
+          version: '1.0'
+        },
+        language: 'en-US',
+        provider: 'google',
+        model: 'gemini-1.5-pro',
+        searchProvider: 'tavily',
+        maxResults: 8
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('report');
+    // For JSON array format, we should get a JSON string
+    const report = response.body.report;
+    expect(typeof report).toBe('string');
+
+    // Parse the JSON to verify it's valid and has the expected structure
+    const parsedReport = JSON.parse(report);
+    expect(Array.isArray(parsedReport)).toBe(true);
+    expect(parsedReport.length).toBe(3); // Exactly 3 products
+
+    // Check that each product has the required fields
+    parsedReport.forEach(product => {
+      expect(product).toHaveProperty('id');
+      expect(product).toHaveProperty('name');
+      expect(product).toHaveProperty('imageUrl');
+      expect(product).toHaveProperty('features');
+      expect(product).toHaveProperty('pros');
+      expect(product).toHaveProperty('cons');
+      expect(product).toHaveProperty('justification');
+    });
+
+    // Check for specific product names
+    const productNames = parsedReport.map(p => p.name);
+    expect(productNames).toContain('Samsung Galaxy S23 Ultra');
+    expect(productNames).toContain('Samsung Galaxy Z Fold 4');
+    expect(productNames).toContain('Samsung Galaxy S23+');
+  });
+
   test('POST /api/research/start should generate search queries', async () => {
     const response = await request(app)
       .post('/api/research/start')
@@ -278,6 +435,41 @@ describe('Research Routes', () => {
 
     expect(response.status).toBe(500);
     expect(response.body).toHaveProperty('error');
+  });
+
+  test('should handle product mode errors gracefully', async () => {
+    // Mock a failure in performProductResearch
+    const research = require('../../src/utils/research');
+    research.performProductResearch.mockRejectedValueOnce(new Error('Product research error'));
+
+    const response = await request(app)
+      .post('/api/research/query')
+      .send({
+        promType: 'product',
+        reportStyle: 'product',
+        productCategory: 'Smartphone',
+        language: 'en-US'
+      });
+
+    expect(response.status).toBe(200); // We still return 200 with an error report
+    expect(response.body).toHaveProperty('report');
+    expect(response.body.report).toContain('Error During Research');
+  });
+
+  test('should fallback to standard research when product mode validation fails', async () => {
+    const response = await request(app)
+      .post('/api/research/query')
+      .send({
+        promType: 'product', // Missing reportStyle: 'product'
+        productCategory: 'Smartphone',
+        query: 'Best smartphones', // This will trigger standard research
+        language: 'en-US'
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('report');
+    // Should use standard research
+    expect(response.body.report).toContain('Quantum Computing Report');
   });
 
   test('should validate request body', async () => {

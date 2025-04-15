@@ -60,6 +60,20 @@ function getSERPQuerySchema() {
 }
 
 /**
+ * Get the product search query schema
+ */
+function getProductQuerySchema() {
+  return z.array(
+    z.object({
+      query: z.string(),
+      researchGoal: z.string(),
+      productCategory: z.string(),
+      specificFeature: z.string().optional(),
+    })
+  );
+}
+
+/**
  * Generate a prompt for SERP queries
  */
 async function generateSerpQueriesPrompt(query) {
@@ -215,6 +229,155 @@ function writeFinalReportPrompt(query, learnings, requirement = "", reportStyle 
 - Properly formatted using markdown syntax for readability`,
     `You need to write this report like a human researcher. Humans do not wrap their writing in markdown blocks. Include diverse data information such as tables, katex formulas, mermaid diagrams, etc. in the form of markdown syntax. **DO NOT** output anything other than the report.`,
   ].join("\n\n");
+}
+
+/**
+ * Generate a prompt for product research queries
+ */
+function generateProductQueriesPrompt(productData) {
+  // Extract product information from the input data
+  const { productCategory, productName = '', userPreferences = {}, extraDetails = {} } = productData;
+
+  // Create a schema for the expected output
+  let outputSchema;
+  try {
+    if (!zodToJsonSchema) {
+      // Dynamically import zod-to-json-schema (ES Module)
+      zodToJsonSchema = require('zod-to-json-schema').zodToJsonSchema;
+    }
+    outputSchema = zodToJsonSchema(getProductQuerySchema());
+  } catch (error) {
+    log.error('Error generating JSON schema', { error: error.message });
+    outputSchema = 'Array of objects with query, researchGoal, productCategory, and optional specificFeature properties';
+  }
+
+  // Format user preferences for the prompt
+  const preferencesString = Object.entries(userPreferences)
+    .map(([key, value]) => `- ${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+    .join('\n');
+
+  // Format extra details for the prompt
+  const extraDetailsString = Object.entries(extraDetails)
+    .map(([key, value]) => `- ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
+    .join('\n');
+
+  // Example of properly formatted JSON output
+  const exampleOutput = JSON.stringify([
+    {
+      query: `Best ${productCategory} with ${userPreferences.features ? userPreferences.features[0] : 'high performance'}`,
+      researchGoal: `Find top-rated ${productCategory} models that excel in ${userPreferences.features ? userPreferences.features[0] : 'performance'}`,
+      productCategory: productCategory,
+      specificFeature: userPreferences.features ? userPreferences.features[0] : undefined
+    },
+    {
+      query: `${productCategory} comparison ${userPreferences.budget ? 'under ' + userPreferences.budget : ''}`,
+      researchGoal: `Compare different ${productCategory} models ${userPreferences.budget ? 'within ' + userPreferences.budget + ' price range' : ''}`,
+      productCategory: productCategory
+    }
+  ], null, 2);
+
+  return [
+    `I need to research ${productCategory}${productName ? ' specifically ' + productName : ''} with the following preferences and requirements:`,
+    preferencesString ? `<preferences>\n${preferencesString}\n</preferences>` : '',
+    extraDetailsString ? `<extraDetails>\n${extraDetailsString}\n</extraDetails>` : '',
+    `Based on this information, generate a list of search queries that will help thoroughly research this product category and find the best options that match the specified preferences.`,
+    `IMPORTANT: You MUST respond with ONLY valid JSON array. Do not include any explanations, markdown formatting, or backticks in your response.`,
+    `The JSON must match this schema:\n${outputSchema}`,
+    `Here is an example of the exact format expected:\n${exampleOutput}`,
+    `Remember: Your entire response must be a valid JSON array that can be parsed directly. Do not include any text before or after the JSON.`
+  ].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Generate a prompt for writing the product research report
+ */
+function writeProductReportPrompt(productData, learnings) {
+  // Extract product information from the input data
+  const { productCategory, productName = '', userPreferences = {}, extraDetails = {} } = productData;
+
+  const learningsString = learnings
+    .map((learning) => `<learning>\n${learning}\n</learning>`)
+    .join("\n");
+
+  // Format user preferences for the prompt
+  const preferencesString = Object.entries(userPreferences)
+    .map(([key, value]) => `- ${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
+    .join('\n');
+
+  // Format extra details for the prompt
+  const extraDetailsString = Object.entries(extraDetails)
+    .map(([key, value]) => `- ${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`)
+    .join('\n');
+
+  // Always use JSON format for product mode
+  const jsonFormatInstructions = `
+IMPORTANT: You must format your response as a valid JSON object with the following structure:
+
+{
+  "success": true,
+  "recommendations": [
+    {
+      "id": "1",
+      "name": "Product Name",
+      "imageUrl": "https://example.com/image.jpg",
+      "features": ["Feature 1", "Feature 2", "Feature 3"],
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1"],
+      "justification": "This product matches your preferences for brand, screen size, and camera quality."
+    },
+    // Additional recommendations...
+  ]
+}
+
+You MUST include EXACTLY THREE (3) product recommendations in the recommendations array. Each product should have all the fields shown above.
+
+Example format:
+{
+  "success": true,
+  "recommendations": [
+    {
+      "id": "product1",
+      "name": "Product Name 1",
+      "imageUrl": "https://example.com/image1.jpg",
+      "features": ["Feature 1", "Feature 2"],
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1", "Con 2"],
+      "justification": "Explanation of why this product is recommended"
+    },
+    {
+      "id": "product2",
+      "name": "Product Name 2",
+      "imageUrl": "https://example.com/image2.jpg",
+      "features": ["Feature 1", "Feature 2"],
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1", "Con 2"],
+      "justification": "Explanation of why this product is recommended"
+    },
+    {
+      "id": "product3",
+      "name": "Product Name 3",
+      "imageUrl": "https://example.com/image3.jpg",
+      "features": ["Feature 1", "Feature 2"],
+      "pros": ["Pro 1", "Pro 2"],
+      "cons": ["Con 1", "Con 2"],
+      "justification": "Explanation of why this product is recommended"
+    }
+  ]
+}
+
+Do not include any text before or after the JSON object. The response must be valid JSON that can be parsed directly.`;
+
+  return [
+    `Generate a comprehensive product research report for ${productCategory}${productName ? ' specifically ' + productName : ''} based on the following user preferences and requirements:`,
+    preferencesString ? `<preferences>\n${preferencesString}\n</preferences>` : '',
+    extraDetailsString ? `<extraDetails>\n${extraDetailsString}\n</extraDetails>` : '',
+    `Here are all the learnings from the research:\n<learnings>\n${learningsString}\n</learnings>`,
+    jsonFormatInstructions,
+    `You need to analyze the research data and provide EXACTLY THREE (3) product recommendations that best match the user's preferences.`,
+    `Each recommendation must include all required fields: id, name, imageUrl, features, pros, cons, and justification.`,
+    `The justification should explain why this product is a good match for the user's specific preferences.`,
+    `Your response must be a valid JSON object that can be parsed directly. Do not include any text before or after the JSON.`
+  ].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -1075,15 +1238,364 @@ async function performDirectResearch(
   }
 }
 
+/**
+ * Perform product research based on structured input
+ */
+async function performProductResearch(
+  productData,
+  language = "en-US",
+  provider = "google",
+  model,
+  searchProvider = "tavily",
+  maxIterations = 2,
+  options = {}
+) {
+  // Extract options with defaults
+  const detailLevel = options.detailLevel || 'comprehensive';
+  const responseFormat = options.responseFormat;
+
+  try {
+    log.info(`Starting product research`, {
+      productCategory: productData.productCategory,
+      language,
+      provider,
+      searchProvider,
+      hasResponseFormat: !!responseFormat
+    });
+
+    // Validate required product data
+    if (!productData.productCategory) {
+      throw new Error('Product category is required for product research');
+    }
+
+    // Step 1: Generate product-specific search queries
+    log.info("Step 1: Generating product search queries");
+    let queries = [];
+    try {
+      const { networkingModel } = getModel(provider, model);
+
+      // Use retry mechanism with fallback to a different model if rate limited
+      const result = await withRetry(async (context) => {
+        // Use the model from context if available (for fallback), otherwise use the original model
+        const modelToUse = context.model || networkingModel;
+        const model = createProvider(provider, modelToUse);
+
+        // Set the system prompt for product research
+        const systemPrompt = getSystemPrompt('product');
+
+        // Generate the product queries prompt
+        const prompt = generateProductQueriesPrompt(productData);
+
+        const response = await model.generateContent({
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: systemPrompt + "\n\n" + prompt + "\n\n" + getOutputGuidelinesPrompt(detailLevel) + "\n\n" + getResponseLanguagePrompt(language) }]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 1024,
+          },
+        });
+
+        const content = response.response.text();
+
+        // Use the robust JSON parser with detailed source information
+        return safeJsonParse(content, 'generateProductQueries', [
+          {
+            query: `Best ${productData.productCategory} ${productData.userPreferences?.budget ? 'under ' + productData.userPreferences.budget : ''}`,
+            researchGoal: `Find top-rated ${productData.productCategory} models that match user preferences`,
+            productCategory: productData.productCategory
+          },
+          {
+            query: `${productData.productCategory} comparison reviews ${new Date().getFullYear()}`,
+            researchGoal: `Compare different ${productData.productCategory} models based on features and performance`,
+            productCategory: productData.productCategory
+          },
+          {
+            query: `${productData.productCategory} buying guide ${new Date().getFullYear()}`,
+            researchGoal: `Get expert recommendations and buying advice for ${productData.productCategory}`,
+            productCategory: productData.productCategory
+          },
+          {
+            query: `${productData.productCategory} pros and cons ${productData.userPreferences?.brandPreference || ''}`,
+            researchGoal: `Identify specific advantages and disadvantages of ${productData.productCategory} models`,
+            productCategory: productData.productCategory
+          },
+          {
+            query: `${productData.productCategory} expert reviews ${new Date().getFullYear()}`,
+            researchGoal: `Find professional evaluations of ${productData.productCategory} models`,
+            productCategory: productData.productCategory
+          },
+          {
+            query: `Best ${productData.productCategory} for ${productData.userPreferences?.features ? productData.userPreferences.features.join(' ') : 'quality and performance'}`,
+            researchGoal: `Find ${productData.productCategory} models that excel in specific features requested by user`,
+            productCategory: productData.productCategory
+          }
+        ]);
+      }, {
+        maxRetries: 3,
+        fallbackModel: "gemini-1.5-flash", // Fallback to a smaller model if rate limited
+        context: { model: networkingModel } // Pass the original model for context
+      });
+
+      queries = result;
+    } catch (error) {
+      log.error("Error generating product search queries", {
+        error: error.message,
+        stack: error.stack
+      });
+      // Use default product queries if there's an error
+      queries = [
+        {
+          query: `Best ${productData.productCategory} ${productData.userPreferences?.budget ? 'under ' + productData.userPreferences.budget : ''}`,
+          researchGoal: `Find top-rated ${productData.productCategory} models that match user preferences`,
+          productCategory: productData.productCategory
+        },
+        {
+          query: `${productData.productCategory} comparison reviews ${new Date().getFullYear()}`,
+          researchGoal: `Compare different ${productData.productCategory} models based on features and performance`,
+          productCategory: productData.productCategory
+        },
+        {
+          query: `${productData.productCategory} buying guide ${new Date().getFullYear()}`,
+          researchGoal: `Get expert recommendations and buying advice for ${productData.productCategory}`,
+          productCategory: productData.productCategory
+        },
+        {
+          query: `${productData.productCategory} pros and cons ${productData.userPreferences?.brandPreference || ''}`,
+          researchGoal: `Identify specific advantages and disadvantages of ${productData.productCategory} models`,
+          productCategory: productData.productCategory
+        },
+        {
+          query: `${productData.productCategory} expert reviews ${new Date().getFullYear()}`,
+          researchGoal: `Find professional evaluations of ${productData.productCategory} models`,
+          productCategory: productData.productCategory
+        },
+        {
+          query: `Best ${productData.productCategory} for ${productData.userPreferences?.features ? (Array.isArray(productData.userPreferences.features) ? productData.userPreferences.features.join(' ') : productData.userPreferences.features) : 'quality and performance'}`,
+          researchGoal: `Find ${productData.productCategory} models that excel in specific features requested by user`,
+          productCategory: productData.productCategory
+        }
+      ];
+    }
+
+    // Step 2: Run search tasks for product queries
+    log.info("Step 2: Running product search tasks", { queryCount: queries.length });
+    let results = [];
+    try {
+      // Use more search results and parallel search for better product coverage
+      const searchResults = await runSearchTasks(
+        queries,
+        language,
+        provider,
+        model,
+        true,
+        searchProvider,
+        true, // Enable parallel search for faster results
+        options.maxResults || 12 // Use more results for comprehensive product research
+      );
+      results = searchResults.results || [];
+
+      log.info("Product search completed", {
+        resultsCount: results.length,
+        totalSources: results.reduce((count, result) => count + (result.sources?.length || 0), 0)
+      });
+    } catch (error) {
+      log.error("Error running product search tasks", {
+        error: error.message,
+        stack: error.stack
+      });
+      // Continue with empty results if there's an error
+    }
+
+    // Collect all learnings
+    let allLearnings = [];
+    results.forEach(result => {
+      if (result && result.learnings && Array.isArray(result.learnings)) {
+        allLearnings = [...allLearnings, ...result.learnings];
+      }
+    });
+
+    // Step 3: Generate the product report
+    log.info("Step 3: Generating product report", {
+      learningsCount: allLearnings.length
+    });
+    try {
+      const { networkingModel } = getModel(provider, model);
+
+      // Use retry mechanism with fallback to a different model if rate limited
+      const report = await withRetry(async (context) => {
+        // Use the model from context if available (for fallback), otherwise use the original model
+        const modelToUse = context.model || networkingModel;
+        const model = createProvider(provider, modelToUse);
+
+        // Set the system prompt for product research
+        const systemPrompt = getSystemPrompt('product');
+
+        // Generate the product report prompt
+        const prompt = writeProductReportPrompt(productData, allLearnings);
+
+        const response = await model.generateContent({
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: systemPrompt + "\n\n" + prompt + "\n\n" + getResponseLanguagePrompt(language) }]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.8, // Higher temperature for more creative and diverse product recommendations
+            maxOutputTokens: 32768,
+            topP: 0.95, // Slightly higher topP for more diverse options
+            topK: 40 // Broader sampling for more varied product recommendations
+          },
+        });
+
+        log.info("Generated product report", {
+          productCategory: productData.productCategory,
+          responseFormat: !!options.responseFormat,
+          modelUsed: modelToUse
+        });
+
+        // Get the raw text
+        const rawText = response.response.text();
+
+        // For product mode, try to parse as JSON first
+        if (productData.mode === 'product' ||
+            productData.promType === 'product' ||
+            productData.reportStyle === 'product') {
+          try {
+            // Try to parse as JSON
+            const jsonResponse = safeJsonParse(rawText);
+            if (jsonResponse) {
+              // If it's already valid JSON, return it as is
+              return JSON.stringify(jsonResponse, null, 2);
+            }
+          } catch (jsonError) {
+            log.warn("Failed to parse product response as JSON, falling back to text", {
+              error: jsonError.message
+            });
+          }
+        }
+
+        // If not product mode or JSON parsing failed, normalize for markdown compatibility
+        return normalizeMarkdownNewlines(rawText);
+      }, {
+        maxRetries: 3,
+        fallbackModel: "gemini-1.5-flash", // Fallback to a smaller model if rate limited
+        context: { model: networkingModel } // Pass the original model for context
+      });
+
+      log.info("Product research completed successfully", {
+        productCategory: productData.productCategory,
+        reportLength: report.length
+      });
+
+      return report;
+    } catch (error) {
+      log.error("Error generating product report", {
+        error: error.message,
+        stack: error.stack
+      });
+      // Return a basic report if there's an error
+      if (productData.mode === 'product' ||
+          productData.promType === 'product' ||
+          productData.reportStyle === 'product') {
+        // For product mode, return error in JSON format
+        const errorJson = {
+          success: false,
+          error: error.message,
+          recommendations: [
+            {
+              id: "error1",
+              name: "Error generating recommendations",
+              imageUrl: "",
+              features: ["Unable to generate features due to an error"],
+              pros: ["N/A"],
+              cons: ["N/A"],
+              justification: "An error occurred during product research: " + error.message
+            }
+          ]
+        };
+        return JSON.stringify(errorJson, null, 2);
+      } else {
+        // For other modes, return markdown error report
+        const errorReport = `# Product Research Report: ${productData.productCategory}
+
+` +
+               `## Error Generating Full Report
+
+` +
+               `We encountered an error while generating the full product report: ${error.message}
+
+` +
+               `## Key Learnings
+
+` +
+               allLearnings.map((learning, index) => `${index + 1}. ${learning}`).join('\n\n');
+
+        return normalizeMarkdownNewlines(errorReport);
+      }
+    }
+  } catch (error) {
+    log.error("Error in product research", {
+      productCategory: productData.productCategory,
+      error: error.message,
+      stack: error.stack
+    });
+
+    // Return a basic report even if the entire process fails
+    if (productData.mode === 'product' ||
+        productData.promType === 'product' ||
+        productData.reportStyle === 'product') {
+      // For product mode, return error in JSON format
+      const errorJson = {
+        success: false,
+        error: error.message,
+        recommendations: [
+          {
+            id: "error1",
+            name: "Error in product research",
+            imageUrl: "",
+            features: ["Unable to generate features due to an error"],
+            pros: ["N/A"],
+            cons: ["N/A"],
+            justification: "An error occurred during product research: " + error.message
+          }
+        ]
+      };
+      return JSON.stringify(errorJson, null, 2);
+    } else {
+      // For other modes, return markdown error report
+      const errorReport = `# Product Research Report: ${productData.productCategory || 'Requested Product'}
+
+` +
+             `## Error Generating Report
+
+` +
+             `We encountered an error while researching this product: ${error.message}
+
+` +
+             `Please try again later or refine your query with more specific product information.`;
+
+      return normalizeMarkdownNewlines(errorReport);
+    }
+  }
+}
+
 module.exports = {
   getSystemPrompt,
   getOutputGuidelinesPrompt,
   getResponseLanguagePrompt,
   getSERPQuerySchema,
+  getProductQuerySchema,
   generateSerpQueriesPrompt,
+  generateProductQueriesPrompt,
   processResultPrompt,
   reviewSerpQueriesPrompt,
   writeFinalReportPrompt,
+  writeProductReportPrompt,
   removeJsonMarkdown,
   safeJsonParse,
   sleep,
@@ -1095,5 +1607,6 @@ module.exports = {
   reviewSearchResults,
   writeFinalReport,
   performDirectResearch,
+  performProductResearch,
   normalizeMarkdownNewlines
 };

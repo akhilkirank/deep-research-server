@@ -16,7 +16,10 @@ const systemPrompts = {
   technical: "You are a technical documentation specialist. Your task is to help users research technical topics, understand complex systems, and create clear, accurate technical documentation.",
 
   // News analysis system prompt
-  news: "You are a news research assistant. Your task is to help users research current events, analyze news from multiple sources, and provide balanced, fact-based summaries of news topics."
+  news: "You are a news research assistant. Your task is to help users research current events, analyze news from multiple sources, and provide balanced, fact-based summaries of news topics.",
+
+  // Product research system prompt
+  product: "You are a product research specialist with expertise in analyzing and comparing products across various categories. Your task is to help users research products thoroughly, evaluate features, compare options, and provide data-driven recommendations based on user preferences and requirements. You should focus on objective analysis, highlighting pros and cons, and providing clear recommendations based on user-specified criteria."
 };
 
 // Report Style Prompts
@@ -31,7 +34,10 @@ const reportStylePrompts = {
   technical: "Structure the documentation with the following sections:\n1. Overview\n2. Architecture\n3. Components\n4. Implementation Details\n5. API Reference\n6. Usage Examples\n7. Troubleshooting\n8. References",
 
   // News summary style
-  news: "Structure the report with the following sections:\n1. Executive Summary\n2. Background\n3. Key Developments\n4. Stakeholder Perspectives\n5. Analysis\n6. Implications\n7. Future Developments\n8. Sources"
+  news: "Structure the report with the following sections:\n1. Executive Summary\n2. Background\n3. Key Developments\n4. Stakeholder Perspectives\n5. Analysis\n6. Implications\n7. Future Developments\n8. Sources",
+
+  // Product research style
+  product: "Structure the product research report with the following sections:\n1. Introduction - Summarize the user's requirements and research goals\n2. Methodology - Brief overview of research sources and evaluation criteria\n3. Product Category Overview - General information about the product category and current market trends\n4. Detailed Product Analysis - For each recommended product:\n   - Key Specifications\n   - Pros and Cons\n   - Price Information\n   - Expert Opinions\n   - User Reviews Summary\n5. Comparative Analysis - Side-by-side comparison of top recommendations\n6. Final Recommendations - Personalized product recommendations based on user preferences\n7. Additional Considerations - Other factors to consider (upcoming releases, alternatives, etc.)\n8. Sources - References to data sources used in the research"
 };
 
 /**

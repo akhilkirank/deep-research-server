@@ -9,6 +9,7 @@ const {
   reviewSearchResults,
   writeFinalReport,
   performDirectResearch,
+  performProductResearch,
   normalizeMarkdownNewlines
 } = require('../utils/research');
 
@@ -27,7 +28,8 @@ const ResearchQuerySchema = z.object({
     z.number(),
     z.string().regex(/^\d+$/).transform(val => parseInt(val, 10))
   ]).default(2),
-  reportStyle: z.string().optional(),
+  // Single mode parameter to replace promptType and reportStyle
+  mode: z.enum(['default', 'academic', 'technical', 'news', 'product']).default('default'),
   // Handle both number and string representations of numbers
   temperature: z.union([
     z.number(),
@@ -38,9 +40,87 @@ const ResearchQuerySchema = z.object({
     z.number(),
     z.string().regex(/^\d+$/).transform(val => parseInt(val, 10))
   ]).optional(),
-  promptType: z.string().optional(),
   detailLevel: z.enum(['brief', 'standard', 'comprehensive']).default('standard'),
-  requirement: z.string().optional()
+  requirement: z.string().optional(),
+  // For backward compatibility
+  reportStyle: z.string().optional(),
+  promptType: z.string().optional()
+});
+
+// Product Mode Schema - New Format
+const ProductQuestionSchema = z.object({
+  text: z.string(),
+  answer: z.string(),
+  keywords: z.string().optional()
+});
+
+const ProductPreferencesSchema = z.union([
+  // New format with questions array
+  z.object({
+    questions: z.array(ProductQuestionSchema)
+  }),
+  // Alternative format with direct key-value pairs
+  z.record(z.string(), z.string())
+]);
+
+const ProductContextSchema = z.object({
+  category: z.string(),
+  productType: z.string()
+});
+
+const ProductResponseFormatSchema = z.object({
+  structure: z.string().optional(),
+  fields: z.array(z.string()).optional()
+});
+
+const ProductMetadataSchema = z.object({
+  requestType: z.string().optional(),
+  responseFormat: ProductResponseFormatSchema.optional(),
+  version: z.string().optional()
+});
+
+const ProductQuerySchema = z.object({
+  // Standard research parameters
+  query: z.string().optional(),
+  language: z.string().default("en-US"),
+  provider: z.string().default("google"),
+  model: z.string().optional(),
+  searchProvider: z.string().default("tavily"),
+  maxResults: z.union([
+    z.number(),
+    z.string().regex(/^\d+$/).transform(val => parseInt(val, 10))
+  ]).optional().default(8),
+
+  // Product-specific parameters
+  context: ProductContextSchema,
+  preferences: ProductPreferencesSchema,
+  metadata: ProductMetadataSchema.optional()
+});
+
+// Legacy product schema for backward compatibility
+const LegacyProductQuerySchema = z.object({
+  promType: z.literal("product"),
+  reportStyle: z.literal("product"),
+  productCategory: z.string().min(1),
+  productName: z.string().optional().default(""),
+  userPreferences: z.object({
+    budget: z.string().optional(),
+    screenSize: z.string().optional(),
+    features: z.array(z.string()).optional(),
+    brandPreference: z.string().optional()
+  }).catchall(z.any()).optional().default({}),
+  extraDetails: z.object({
+    focus: z.string().optional(),
+    notes: z.string().optional()
+  }).catchall(z.any()).optional().default({}),
+  language: z.string().default("en-US"),
+  provider: z.string().default("google"),
+  model: z.string().optional(),
+  searchProvider: z.string().default("tavily"),
+  maxResults: z.union([
+    z.number(),
+    z.string().regex(/^\d+$/).transform(val => parseInt(val, 10))
+  ]).optional().default(8)
 });
 
 /**
@@ -73,8 +153,218 @@ router.post('/query', async (req, res) => {
     // Log the incoming request for debugging
     console.log('Received research query request:', JSON.stringify(preprocessedBody));
 
-    // Validate request body
-    const result = ResearchQuerySchema.safeParse(preprocessedBody);
+    // Check if this is a product mode request based on the mode parameter
+    const isProductMode = preprocessedBody.mode === 'product';
+
+    // Check if this is a product mode request - new format
+    const isNewProductMode = (isProductMode ||
+                          (preprocessedBody.context &&
+                           preprocessedBody.preferences &&
+                           (Array.isArray(preprocessedBody.preferences.questions) ||
+                            (typeof preprocessedBody.preferences === 'object' &&
+                             Object.keys(preprocessedBody.preferences).length > 0))));
+
+    // Check if this is a legacy product mode request
+    const isLegacyProductMode = (isProductMode ||
+                             (preprocessedBody.promType === 'product' &&
+                              preprocessedBody.reportStyle === 'product')) &&
+                             preprocessedBody.productCategory;
+
+    if (isNewProductMode) {
+      console.log('Detected New Product Mode request');
+
+      // Validate against the new product schema
+      const productResult = ProductQuerySchema.safeParse(preprocessedBody);
+
+      if (productResult.success) {
+        console.log('Valid Product Mode request, proceeding with product research');
+
+        // Extract product data
+        const productData = productResult.data;
+
+        // Convert the new format to a format compatible with our product research function
+        const convertedProductData = {
+          productCategory: productData.context.productType,
+          productName: "",
+          userPreferences: {},
+          extraDetails: {}
+        };
+
+        // Extract preferences based on format
+        if (Array.isArray(productData.preferences.questions)) {
+          // Format with questions array
+          productData.preferences.questions.forEach(question => {
+            // Map common question types to our internal format
+            const text = question.text.toLowerCase();
+
+            if (text.includes('brand')) {
+              convertedProductData.userPreferences.brandPreference = question.answer;
+            } else if (text.includes('screen size')) {
+              convertedProductData.userPreferences.screenSize = question.answer;
+            } else if (text.includes('budget')) {
+              convertedProductData.userPreferences.budget = question.answer;
+            } else if (text.includes('feature')) {
+              if (!convertedProductData.userPreferences.features) {
+                convertedProductData.userPreferences.features = [];
+              }
+              convertedProductData.userPreferences.features.push(question.answer);
+            } else if (text.includes('color')) {
+              convertedProductData.userPreferences.color = question.answer;
+            } else {
+              // For other question types, store them in extraDetails
+              convertedProductData.extraDetails[text.replace(/\s+/g, '_')] = question.answer;
+              if (question.keywords) {
+                convertedProductData.extraDetails[`${text.replace(/\s+/g, '_')}_keywords`] = question.keywords;
+              }
+            }
+          });
+        } else {
+          // Format with direct key-value pairs
+          Object.entries(productData.preferences).forEach(([key, value]) => {
+            const keyLower = key.toLowerCase();
+
+            if (keyLower.includes('brand')) {
+              convertedProductData.userPreferences.brandPreference = value;
+            } else if (keyLower.includes('screen') && keyLower.includes('size')) {
+              convertedProductData.userPreferences.screenSize = value;
+            } else if (keyLower.includes('budget')) {
+              convertedProductData.userPreferences.budget = value;
+            } else if (keyLower.includes('feature')) {
+              if (!convertedProductData.userPreferences.features) {
+                convertedProductData.userPreferences.features = [];
+              }
+              convertedProductData.userPreferences.features.push(value);
+            } else if (keyLower.includes('color')) {
+              convertedProductData.userPreferences.color = value;
+            } else {
+              // For other preference types, store them in extraDetails
+              convertedProductData.extraDetails[keyLower.replace(/\s+/g, '_')] = value;
+            }
+          });
+        }
+
+        // Add metadata if available
+        if (productData.metadata) {
+          convertedProductData.metadata = productData.metadata;
+        }
+
+        console.log('Converted product data:', JSON.stringify(convertedProductData, null, 2));
+
+        // Perform product research
+        try {
+          const report = await performProductResearch(
+            convertedProductData,
+            productData.language || "en-US",
+            productData.provider || "google",
+            productData.model,
+            productData.searchProvider || "tavily",
+            2, // maxIterations
+            {
+              maxResults: productData.maxResults || 12, // Increased for better coverage
+              detailLevel: 'comprehensive',
+              responseFormat: productData.metadata?.responseFormat,
+              // Pass additional options to ensure we get exactly 3 recommendations
+              requireExactlyThreeProducts: true
+            }
+          );
+
+          // Save the report to a file
+          try {
+            const filePath = await saveReportToFile(report, `${convertedProductData.productCategory} Research`);
+            // Return the report and file path
+            return res.json({ report, filePath });
+          } catch (fileError) {
+            console.error("Error saving product report to file:", fileError);
+            // Still return the report even if file saving fails
+            return res.json({ report, error: "Failed to save report to file" });
+          }
+        } catch (error) {
+          console.error("Error in product research:", error);
+
+          // Generate a basic report even if the research process fails
+          const errorReport = `# Product Research Report: ${convertedProductData.productCategory}\n\n` +
+                  `## Error During Research\n\n` +
+                  `We encountered an error while researching this product: ${error.message}\n\n` +
+                  `Please try again later or refine your query.`;
+
+          const formattedReport = normalizeMarkdownNewlines(errorReport);
+
+          // Try to save the error report to a file
+          try {
+            const filePath = await saveReportToFile(formattedReport, `${convertedProductData.productCategory} Research Error`);
+            return res.json({ report: formattedReport, filePath });
+          } catch (fileError) {
+            console.error("Error saving error report to file:", fileError);
+            return res.json({ report: formattedReport, error: "Failed to save report to file" });
+          }
+        }
+      } else {
+        console.error('Invalid Product Mode request:', productResult.error.errors);
+        // Continue with standard research as fallback
+      }
+    } else if (isLegacyProductMode) {
+      console.log('Detected Legacy Product Mode request');
+
+      // Validate against the legacy product schema
+      const legacyProductResult = LegacyProductQuerySchema.safeParse(preprocessedBody);
+
+      if (!legacyProductResult.success) {
+        console.error('Invalid Legacy Product Mode request:', legacyProductResult.error.errors);
+        // Continue with standard research as fallback
+      } else {
+        // Handle legacy product mode format
+        try {
+          const report = await performProductResearch(
+            preprocessedBody,
+            preprocessedBody.language || "en-US",
+            preprocessedBody.provider || "google",
+            preprocessedBody.model,
+            preprocessedBody.searchProvider || "tavily",
+            2, // maxIterations
+            {
+              maxResults: preprocessedBody.maxResults || 12,
+              detailLevel: 'comprehensive',
+              requireExactlyThreeProducts: true
+            }
+          );
+
+          // Save the report to a file
+          try {
+            const filePath = await saveReportToFile(report, `${preprocessedBody.productCategory} Research`);
+            // Return the report and file path
+            return res.json({ report, filePath });
+          } catch (fileError) {
+            console.error("Error saving product report to file:", fileError);
+            // Still return the report even if file saving fails
+            return res.json({ report, error: "Failed to save report to file" });
+          }
+        } catch (error) {
+          console.error("Error in legacy product research:", error);
+
+          // Generate a basic report even if the research process fails
+          const errorReport = `# Product Research Report: ${preprocessedBody.productCategory}\n\n` +
+                  `## Error During Research\n\n` +
+                  `We encountered an error while researching this product: ${error.message}\n\n` +
+                  `Please try again later or refine your query.`;
+
+          const formattedReport = normalizeMarkdownNewlines(errorReport);
+
+          // Try to save the error report to a file
+          try {
+            const filePath = await saveReportToFile(formattedReport, `${preprocessedBody.productCategory} Research Error`);
+            return res.json({ report: formattedReport, filePath });
+          } catch (fileError) {
+            console.error("Error saving error report to file:", fileError);
+            return res.json({ report: formattedReport, error: "Failed to save report to file" });
+          }
+        }
+      }
+    }
+
+    // Only validate against standard research schema if not in product mode
+    const result = (!isNewProductMode && !isLegacyProductMode) ?
+      ResearchQuerySchema.safeParse(preprocessedBody) :
+      { success: false, error: { errors: [{ message: 'Skipping standard validation for product mode' }] } };
     if (!result.success) {
       console.error('Validation errors:', result.error.errors);
 
