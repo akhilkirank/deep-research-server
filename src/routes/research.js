@@ -12,6 +12,9 @@ const {
   normalizeMarkdownNewlines
 } = require('../utils/research');
 
+// Import file utilities
+const { saveReportToFile } = require('../utils/file-utils');
+
 // Validation schemas
 const ResearchQuerySchema = z.object({
   query: z.string().min(1),
@@ -188,8 +191,16 @@ router.post('/query', async (req, res) => {
       report = normalizeMarkdownNewlines(errorReport);
     }
 
-    // Return the report
-    return res.json({ report });
+    // Save the report to a file
+    try {
+      const filePath = await saveReportToFile(report, query);
+      // Return the report and file path
+      return res.json({ report, filePath });
+    } catch (fileError) {
+      console.error("Error saving report to file:", fileError);
+      // Still return the report even if file saving fails
+      return res.json({ report, error: "Failed to save report to file" });
+    }
   } catch (error) {
     console.error("Error in research/query API:", error);
 
@@ -202,7 +213,15 @@ router.post('/query', async (req, res) => {
                   `Please try again later or contact support if the issue persists.`;
 
     const formattedReport = normalizeMarkdownNewlines(errorReport);
-    return res.json({ report: formattedReport });
+
+    // Try to save the error report to a file
+    try {
+      const filePath = await saveReportToFile(formattedReport, query);
+      return res.json({ report: formattedReport, filePath });
+    } catch (fileError) {
+      console.error("Error saving error report to file:", fileError);
+      return res.json({ report: formattedReport, error: "Failed to save report to file" });
+    }
   }
 });
 
@@ -409,7 +428,16 @@ router.post('/report', async (req, res) => {
     );
 
     // The report is already normalized by the writeFinalReport function
-    return res.json({ report });
+    // Save the report to a file
+    try {
+      const filePath = await saveReportToFile(report.report, topic);
+      // Return the report and file path
+      return res.json({ report: report.report, filePath });
+    } catch (fileError) {
+      console.error("Error saving report to file:", fileError);
+      // Still return the report even if file saving fails
+      return res.json({ report: report.report, error: "Failed to save report to file" });
+    }
   } catch (error) {
     console.error("Error in research/report API:", error);
 
@@ -422,11 +450,23 @@ router.post('/report', async (req, res) => {
 
     const formattedReport = normalizeMarkdownNewlines(errorReport);
 
-    // Return a formatted error report instead of an error status
-    return res.json({
-      report: formattedReport,
-      error: error.message
-    });
+    // Try to save the error report to a file
+    try {
+      const filePath = await saveReportToFile(formattedReport, topic);
+      // Return a formatted error report instead of an error status
+      return res.json({
+        report: formattedReport,
+        error: error.message,
+        filePath
+      });
+    } catch (fileError) {
+      console.error("Error saving error report to file:", fileError);
+      return res.json({
+        report: formattedReport,
+        error: error.message,
+        fileError: "Failed to save report to file"
+      });
+    }
   }
 });
 

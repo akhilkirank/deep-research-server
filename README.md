@@ -9,6 +9,7 @@ A standalone server for performing deep research using AI and web search. This s
 - Integration with multiple LLM providers (Google Gemini, Open Router)
 - Web search functionality using Tavily
 - Detailed, well-structured research reports in Markdown format
+- Automatic saving of reports as Markdown files
 - Structured logging with different log levels
 - Customizable prompt templates and report styles
 
@@ -86,6 +87,25 @@ If a test fails, you'll see detailed information about what went wrong, includin
 
 The server will be available at `http://localhost:3000` (or the port specified in your `.env` file).
 
+### Report Files
+
+All generated reports are automatically saved as Markdown (.md) files in the `reports` directory. This feature ensures that your research is always preserved in a readable format, even if you close the application.
+
+The report files follow this naming convention:
+
+```
+[topic]_[timestamp].md
+```
+
+Where:
+
+- `[topic]` is a sanitized version of the research topic (spaces and special characters replaced with underscores)
+- `[timestamp]` is the date and time when the report was generated (in ISO format with colons replaced by hyphens)
+
+Example: `Quantum_computing_2023-06-15T12-30-45.md`
+
+These files can be opened in any Markdown editor or viewer, such as Visual Studio Code, Typora, or GitHub's web interface.
+
 ### API Endpoints
 
 #### Perform Research
@@ -115,9 +135,12 @@ Response:
 
 ```json
 {
-  "report": "# History of Artificial Intelligence\n\n## Executive Summary\n\nThis report provides a comprehensive overview of the history of artificial intelligence (AI)..."
+  "report": "# History of Artificial Intelligence\n\n## Executive Summary\n\nThis report provides a comprehensive overview of the history of artificial intelligence (AI)...",
+  "filePath": "/path/to/reports/History_of_artificial_intelligence_2023-06-15T12-30-45.md"
 }
 ```
+
+The report is automatically saved as a Markdown file in the `reports` directory. The filename includes the sanitized topic name and a timestamp.
 
 #### Generate Search Queries
 

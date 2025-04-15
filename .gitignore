@@ -69,3 +69,7 @@ Desktop.ini
 
 # Local History for Visual Studio Code
 .history/
+
+# Generated reports
+reports/
+*.md
